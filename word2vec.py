@@ -81,7 +81,7 @@ def loadData(filename):
         wordcodes = pickle.load( open("w2v_wordcodes.p","rb"))
         uniqueWords= pickle.load(open("w2v_uniqueWords.p","rb"))
         wordcounts = pickle.load(open("w2v_wordcounts.p","rb"))
-        return fullrec[:30000]
+        return fullrec
 
 
     #... load in the unlabeled data file. You can load in a subset for debugging purposes.
@@ -158,7 +158,7 @@ def loadData(filename):
 
 
     #... output fullrec should be sequence of tokens, each represented as their one-hot index from wordcodes.
-    return fullrec[:30000]
+    return fullrec
 
 
 
@@ -280,6 +280,7 @@ def performDescent(num_samples, learning_rate, center_token, sequence_chars,W1,W
     nll_new = 0
     d = W1.shape[1] # dimension for embedding
     
+
     for k in range(0, len(sequence_chars)):
 
         #... (TASK) implement gradient descent. Find the current context token from sequence_chars
@@ -287,104 +288,67 @@ def performDescent(num_samples, learning_rate, center_token, sequence_chars,W1,W
         #... weight matrices W1 and W2.
         #... compute the total negative log-likelihood and store this in nll_new.
         
-        ############### for context word v ###############
-    ### Temp W1
+        ############### for context word k ###############
+    ### Temp 
         v = int(sequence_chars[k]) # current context token's index
-        h = W1[v,].reshape((d,1))
+        h = W1[v,]
         summation = 0
+        ng_logsummation = 0 # for later use in calculating nll
 
-    ### update W2
-        v_j_prime = W2[v, ].reshape((d,1))
-        sigmoid_err = sigmoid(np.dot(v_j_prime.T,h))[0,0] - 1
-        
-
-
-
-
-##======================================================================================
-        summation = 0 # keep track of sum(sigmoid() - t) in order to update W1 matrix
-        ng_logsummation = 0 # keep track of a sum of log(sigmoid()) for negative samples in order to calculate nll_new
-
-        ############### for context word v ###############
-    ### output layer to hidden layer
-
-        v = int(sequence_chars[k]) # current context token's index
-        # x = np.zeros((vocab_size,1 )) # this will creat a (m,1) column vector
-        # x[v, 0] = 1 # one hot vector for context token v
-
-        
-        h = W1[v,].reshape((d,1))
-        v_j_prime = W2[v, ].reshape((d,1))
-        #h = np.dot(W1.T,x) # output from the hidden layer: embedding for v: (d, 1) column vector
-        #v_j_prime = W2[v, ].reshape((d,1)) # current embedding for v in W2: a (d, 1) column vector
-
-        # update for W2 for current context token 
-        sigmoid_err = sigmoid(np.dot(v_j_prime.T,h))[0,0] - 1
-        # print ("$$$$$sigmoid_err.shape: ", sigmoid_err.shape)
-        # print ("v_j_prime.T.shape: ", v_j_prime.T.shape)
-        # print("h,shape: ", h.shape)
-
-        summation = sigmoid_err # for later use in updating W2 matrix
+    
+        v_j_prime = W2[v, ]
+        sigmoid_err = sigmoid(np.dot(v_j_prime,h)) - 1
+        summation += sigmoid_err
         v_j_new =  v_j_prime - learning_rate * sigmoid_err * h   # for context word, a (d, 1) column vector
-        W2[v,] = v_j_new.T # update the W2
         
-    
-        ############### for corresponding negative samples  ###############
-        ### for corresponding 2 negative samples: negative_indices[2k] and negative_indices[2k+1]
-        # ng1 =  negative_indices[2k] # context token's corresponding negative sample 1
-        # ng2 = negative_indices[2k+1] # context token's corresponding negative sample 2
-    
-       
-    ### output layer to hidden layer    
+
+
+        ############### for negative samples ###############
+    # summation, for later use in updating W1
+        sigmoid_err_list = []
         for i in range(num_samples):
-            
             ng_index = negative_indices[num_samples*k + i] # context token's corresponding negative sample i
-
-            h_ng = W1[ng_index,].reshape((d,1)) 
-            # x_ng = np.zeros((vocab_size,1 )) # this will creat a (m,1) column vector
-            # x_ng[ng_index, 0] = 1 # one hot vector for this negative sample i
-            # h_ng = np.dot(W1.T,x_ng) # output from the hidden layer: embedding for this negative sample i: (d, 1) column vector
-            v_j_ng = W2[ng_index,].reshape((d,1)) # current embedding for v this negative sample i: a (d, 1) column vector
-
-            # update for W2 for negative samples
-            dot_product = np.dot(v_j_ng.T, h_ng)
-            sigmoid_err = sigmoid(dot_product)[0,0]
-            summation += sigmoid_err # for later use in updating W2 matrix
-            #ng_logsummation += math.log(sigmoid(-dot_product)) # for later use in calculating nll_new
-            v_j_ngnew = v_j_ng - learning_rate *  sigmoid_err * h_ng   # a (d, 1) column vector
-            #updated_vj_ng.append([v_j_ngnew]) # for later use in calculating nll_new
-            W2[ng_index,] = v_j_ngnew.T # update the W2
-
+            v_j_ng = W2[ng_index,] # current embedding for v this negative sample i: a (d, 1) column vector
+            dot_product = np.dot(v_j_ng, h)
+            sigmoid_err = sigmoid(dot_product)
+            summation += sigmoid_err # for later use in updating W1 matrix
+            sigmoid_err_list.append(sigmoid_err)
+            
     
-
-    ############### for current context word & corresponding negative samples ############
-    ### hidden layer to input layer
-        # update for W1 for current context token
-        # v_I = h
-        #v_I = W1[v, ].reshape((d,1)) # current embedding for v in W1: a (d, 1) column vector
-        v_Inew = h - learning_rate * summation * v_j_prime # a (d, 1) column vector 
-        W1[v,] = v_Inew.T # update the W1
-
-        # update for W1 for corresponding negative samples
         for i in range(num_samples):
-            ng_index = int(negative_indices[num_samples*k + i]) # context token's corresponding negative sample i
-            v_I_ng = W1[ng_index, ].reshape((d,1)) # current embedding for this negative sample i in W1: a (d, 1) column vector
-            v_j_ng = W2[ng_index,].reshape((d,1)) # current embedding for this negative sample i in W2: a (d, 1) column vector
-            v_I_ngnew = (v_I_ng - learning_rate * summation * v_j_ng).reshape((d,))  # a(d, 1) column vector
+    # update W1 for negative sample
+            v_j_ng = W2[ng_index,] # current embedding for v this negative sample i: a (d, 1) column vector
+            v_I_ng = W1[ng_index, ] # current embedding for this negative sample i in W1: a (d, 1) column vector
+            v_I_ngnew = (v_I_ng - learning_rate * summation * v_j_ng) # a(d, ) column vector
+
+    # update W2 for negative sample
+            v_j_ngnew = (v_j_ng - learning_rate *  sigmoid_err_list[i] * h)  # a (d, ) column vector
+            
+            W2[ng_index,] = v_j_ngnew # update the W2
             W1[ng_index,] = v_I_ngnew # update the W1
-       
-    ### new log likelihood
-        #h_new = v_Inew # same as new_W1.T.v, a (d, 1) column vector
 
-        # for only one context word and its 2 negative samples
+
+
+        ############## for context word k ###################
+    ### update W1 
+        v_Inew = h - learning_rate * summation * v_j_prime # a (d, 1) column vector
+        W1[v,] = v_Inew # update the W1
+    ### update W2
+        W2[v,] = v_j_new # update the W2
+         
+
+        ############### for negative log likelihoods ###############
         for i in range(num_samples):
-            ng_ind = int(negative_indices[num_samples*k + i]) # context token's corresponding negative sample i
-            v_i = W2[ng_ind]
-            ng_logsummation += math.log(sigmoid(np.dot(-v_i.T,v_Inew))[0])
+            ng_index = negative_indices[num_samples*k + i] # context token's corresponding negative sample i
+            ng_logsummation += math.log(sigmoid(-np.dot(W2[ng_index,],v_Inew)))
 
-        nll_new += -math.log(sigmoid(np.dot(v_j_new.T,v_Inew))[0,0]) - ng_logsummation 
+        nll_new += -math.log(sigmoid(np.dot(v_j_new,v_Inew))) - ng_logsummation 
 
     return [nll_new]
+##======================================================================================
+    
+
+  
 
 
 
@@ -440,19 +404,17 @@ def trainer(curW1 = None, curW2=None):
     for j in range(0,epochs):
         print ("Epoch: ", j)
         prevmark = 0
-        # count = 0
+
         
         #... For each epoch, redo the whole sequence...
         for i in range(start_point,end_point):
-            # count += 1
-            # if count > 10000:
-            #     break
+
 
             if (float(i)/len(mapped_sequence))>=(prevmark+0.1):
                 print ("Progress: ", round(prevmark+0.1,1))
                 prevmark += 0.1
 
-            if iternum%100==0:
+            if iternum%10000==0:
                 print ("Negative likelihood: ", nll)                
                 nll_results.append(nll)
                 iternum_list.append(iternum) # Added
@@ -474,15 +436,17 @@ def trainer(curW1 = None, curW2=None):
             mapped_context = [mapped_sequence[i+ctx] for ctx in context_window] # context window's corresponding sequence word token index in mapped_sequence
             negative_indices = []
          
-            print ("Generate 8 negative samples: ")
+            #print ("Generate 8 negative samples: ")
             
             for q in mapped_context:
                 negative_indices += generateSamples(q, num_samples) # you have 8 elements in our case
-            print ("BAng! Iter:", i," finished!")
+            #print ("BAng! Iter:", i," finished!")
 
             #... implement gradient descent
             [nll_new] = performDescent(num_samples, learning_rate, center_token, mapped_context, W1,W2, negative_indices)
             nll += nll_new # update the nll so that we can print in the beginning of the next loop
+
+        break
 
 
 
@@ -664,10 +628,6 @@ if __name__ == '__main__':
 
 
 
-
-
-
-        sys.exit()
 
         #... we've got the trained weight matrices. Now we can do some predictions
         targets = ["good", "bad", "scary", "funny"]
