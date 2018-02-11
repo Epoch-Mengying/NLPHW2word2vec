@@ -13,6 +13,8 @@ from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize # added
 from numba import jit
 import matplotlib.pyplot as plt
+import heapq # added
+import operator # added
 
 
 
@@ -59,7 +61,7 @@ uniqueWords = [""]                      #... list of all unique tokens
 wordcodes = {}                          #... dictionary mapping of words to indices in uniqueWords
 wordcounts = Counter()                  #... how many times each token occurs
 samplingTable = []                      #... table to draw negative samples from
-
+learned_morph = []                      #... Learned morphology vector
 
 
 
@@ -257,6 +259,7 @@ def generateSamples(context_idx, num_samples):
     
 
     len_table = len(samplingTable)
+  
     while context_idx in results:
         results = []
         #sample =  random.sample(list(samplingTable),1)[0] # a dict key
@@ -280,7 +283,6 @@ def performDescent(num_samples, learning_rate, center_token, sequence_chars,W1,W
     nll_new = 0
     d = W1.shape[1] # dimension for embedding
     
-
     for k in range(0, len(sequence_chars)):
 
         #... (TASK) implement gradient descent. Find the current context token from sequence_chars
@@ -288,61 +290,51 @@ def performDescent(num_samples, learning_rate, center_token, sequence_chars,W1,W
         #... weight matrices W1 and W2.
         #... compute the total negative log-likelihood and store this in nll_new.
         
+
         ############### for context word k ###############
     ### Temp 
         v = int(sequence_chars[k]) # current context token's index
-        h = W1[v,]
-        summation = 0
+        # summation = np.zeros((d,)) # summation, for later use in updating W1
         ng_logsummation = 0 # for later use in calculating nll
 
-    
+        h = W1[center_token,] # center_token, each iterate will be different
         v_j_prime = W2[v, ]
         sigmoid_err = sigmoid(np.dot(v_j_prime,h)) - 1
-        summation += sigmoid_err
+        summation = sigmoid_err * v_j_prime
         v_j_new =  v_j_prime - learning_rate * sigmoid_err * h   # for context word, a (d, 1) column vector
         
-
-
         ############### for negative samples ###############
-    # summation, for later use in updating W1
-        sigmoid_err_list = []
+    # update W2 for negative sample
         for i in range(num_samples):
             ng_index = negative_indices[num_samples*k + i] # context token's corresponding negative sample i
             v_j_ng = W2[ng_index,] # current embedding for v this negative sample i: a (d, 1) column vector
-            dot_product = np.dot(v_j_ng, h)
-            sigmoid_err = sigmoid(dot_product)
-            summation += sigmoid_err # for later use in updating W1 matrix
-            sigmoid_err_list.append(sigmoid_err)
-            
-    
-        for i in range(num_samples):
-    # update W1 for negative sample
-            v_j_ng = W2[ng_index,] # current embedding for v this negative sample i: a (d, 1) column vector
-            v_I_ng = W1[ng_index, ] # current embedding for this negative sample i in W1: a (d, 1) column vector
-            v_I_ngnew = (v_I_ng - learning_rate * summation * v_j_ng) # a(d, ) column vector
-
-    # update W2 for negative sample
-            v_j_ngnew = (v_j_ng - learning_rate *  sigmoid_err_list[i] * h)  # a (d, ) column vector
-            
+            sigmoid_err_ng = sigmoid(np.dot(v_j_ng, h))
+            summation += sigmoid_err_ng * v_j_ng # for later use in updating W1 matrix
+            v_j_ngnew = (v_j_ng - learning_rate *  sigmoid_err_ng * h)  # a (d, ) column vector
             W2[ng_index,] = v_j_ngnew # update the W2
-            W1[ng_index,] = v_I_ngnew # update the W1
+    
 
-
+        new_h = h - learning_rate * summation
 
         ############## for context word k ###################
-    ### update W1 
-        v_Inew = h - learning_rate * summation * v_j_prime # a (d, 1) column vector
-        W1[v,] = v_Inew # update the W1
-    ### update W2
+    ### update W2 for context word
+        
         W2[v,] = v_j_new # update the W2
-         
 
+        
+
+        ############## update W1: for center_word ###################
+    ### update W1 for input word(center_word)        
+        
+        W1[center_token,] = new_h
+
+          
         ############### for negative log likelihoods ###############
         for i in range(num_samples):
             ng_index = negative_indices[num_samples*k + i] # context token's corresponding negative sample i
-            ng_logsummation += math.log(sigmoid(-np.dot(W2[ng_index,],v_Inew)))
+            ng_logsummation += math.log(sigmoid(-np.dot(W2[ng_index,],W1[center_token,])))
 
-        nll_new += -math.log(sigmoid(np.dot(v_j_new,v_Inew))) - ng_logsummation 
+        nll_new += -math.log(sigmoid(np.dot(W2[v,],W1[center_token,]))) - ng_logsummation 
 
     return [nll_new]
 ##======================================================================================
@@ -446,7 +438,7 @@ def trainer(curW1 = None, curW2=None):
             [nll_new] = performDescent(num_samples, learning_rate, center_token, mapped_context, W1,W2, negative_indices)
             nll += nll_new # update the nll so that we can print in the beginning of the next loop
 
-        break
+       
 
 
 
@@ -537,6 +529,123 @@ def train_vectors(preload=False):
 #... for the averaged morphological vector combo, estimate the new form of the target word
 #.................................................................................
 
+def get_morphology():
+    '''
+       Finds 5 patterns of variation with 20 examples each. 
+       returns a list of train, develop, test data each containing 80%, 10%, 10% of token data.
+    '''
+    global uniqueWords
+    
+    morphology_lists = []
+
+    s = [match for match in uniqueWords if match[-3:] == 'ful']
+    matched = [match for match in s if match[:-3] in uniqueWords][:20]
+    pairs = [(i[:-3], i) for i in matched]
+    morphology_lists.append(pairs)
+
+    s = [match for match in uniqueWords if match[-4:] == 'less']
+    matched = [match for match in s if match[:-4] in uniqueWords][:20]
+    pairs = [(i[:-4], i) for i in matched]
+    morphology_lists.append(pairs)
+
+    s = [match for match in uniqueWords if match[:2] == 're']
+    matched = [match for match in s if match[2:] in uniqueWords][:20]
+    pairs = [(i[2:], i) for i in matched]
+    morphology_lists.append(pairs)
+
+    s = [match for match in uniqueWords if match[:2] == 'un']
+    matched = [match for match in s if match[2:] in uniqueWords][:20]
+    pairs = [(i[2:], i) for i in matched]
+    morphology_lists.append(pairs)
+
+    s = [match for match in uniqueWords if match[:3] == 'dis']
+    matched = [match for match in s if match[3:] in uniqueWords][:20]
+    pairs = [(i[3:], i) for i in matched]
+    morphology_lists.append(pairs)
+
+
+    ######## divide the data
+    train = [] # every sub-list should contain 16
+    dev = [] #2
+    test = [] #2
+
+    # divide the data
+    for l in morphology_lists:
+        random.shuffle(l)
+        train.append(l[:16]) 
+        dev += l[16:18]
+        test += l[18:20]
+
+    return [train, dev, test]
+
+
+
+def learn_morphology(word_pairs_list):
+    global word_embeddings, wordcodes 
+
+    W1 = word_embeddings
+    sum_diff = []
+    for word_pair in word_pairs_list:
+        first = wordcodes[word_pair[0]] # finding the corresponding index
+        second = wordcodes[word_pair[1]]
+        diff = W1[first,] - W1[second,]
+        sum_diff.append(diff)
+    
+    total_diff = np.array(sum_diff[0])
+    for diff in sum_diff[1:]:
+        total_diff += diff
+
+    avg_diff = total_diff/len(word_pairs_list)
+    return avg_diff
+
+
+
+
+def get_or_impute_vector(word, do_impute=True):  
+    global learned_morph, word_embeddings
+
+    W1 = word_embeddings
+    if do_impute == False:
+        # if the word is in the training data
+        word_index = wordcodes.get(word, -1)
+        if word_index > -1:
+            return W1[word_index]
+        
+    
+    # if the word is not in the training data, then impute, or if do_impute = True, force it to impute anyway
+    if word[-3:] == 'ful':  #-ful
+        root = word[:-3]
+        root_idx = wordcodes[root]
+        return W1[root_idx,]-learned_morph[0]
+
+    elif word[-4:] == "less": # -less
+        root = word[:-4]
+        root_idx = wordcodes[root]
+        return W1[root_idx,]-learned_morph[1]
+
+    elif word[:2] == "re":  # re-
+        root = word[2:]
+        root_idx = wordcodes[root]
+        return W1[root_idx,]-learned_morph[2]
+
+    elif word[:2] == "un": # un-
+        root = word[2:]
+        root_idx = wordcodes[root]
+        return W1[root_idx,]-learned_morph[3]
+
+    elif word[:3] == "dis": # dis-
+        root = word[3:]
+        root_idx = wordcodes[root]
+        return W1[root_idx,]-learned_morph[4]
+
+    else:
+        # unrecognized pattern 
+        return None
+
+
+
+
+
 def morphology(word_seq):
     global word_embeddings, proj_embeddings, uniqueWords, wordcodes
     embeddings = word_embeddings
@@ -547,7 +656,13 @@ def morphology(word_seq):
     #... (TASK) Use the same approach you used in function prediction() to construct a list
     #... of top 10 most similar words to vector_math. Return this list.
 
+    outputs = []
+    cos_sm = [1 - cosine(vector_math, word_embeddings[w,]) for w in range(len(uniqueWords))]
+    top_10 = heapq.nlargest(10, enumerate(cos_sm), key=lambda x: x[1])
 
+    for pair in top_10:
+        outputs.append(uniqueWords[pair[0]])
+    return outputs
 
 
 
@@ -563,11 +678,18 @@ def analogy(word_seq):
     vectors = [embeddings[wordcodes[word_seq[0]]],
     embeddings[wordcodes[word_seq[1]]],
     embeddings[wordcodes[word_seq[2]]]]
-    vector_math = -vectors[0] + vectors[1] - vectors[2] # + vectors[3] = 0
+    vector_math = -vectors[0] + vectors[1] + vectors[2] # + vectors[3] = 0
     #... find whichever vector is closest to vector_math
     #... (TASK) Use the same approach you used in function prediction() to construct a list
     #... of top 10 most similar words to vector_math. Return this list.
+    outputs = []
+    cos_sm = [1 - cosine(vector_math, word_embeddings[w,]) for w in range(len(uniqueWords))]
+    top_10 = heapq.nlargest(10, enumerate(cos_sm), key=lambda x: x[1])
 
+    for pair in top_10:
+        outputs.append(uniqueWords[pair[0]])
+
+    return outputs
 
 
 
@@ -581,7 +703,7 @@ def analogy(word_seq):
 
 def prediction(target_word):
     global word_embeddings, uniqueWords, wordcodes
-    targets = [target_word]
+    #targets = [target_word]
     outputs = []
     #... (TASK) search through all uniqueWords and for each token, compute its similarity to target_word.
     #... you will compute this using the absolute cosine similarity of the word_embeddings for the word pairs.
@@ -589,14 +711,15 @@ def prediction(target_word):
     #... return a list of top 10 most similar words in the form of dicts,
     #... each dict having format: {"word":<token_name>, "score":<cosine_similarity>}
 
+    target = word_embeddings[wordcodes[target_word],]
+    cos_sm = [1 - cosine(target, word_embeddings[w,]) for w in range(len(uniqueWords))]
+    top_10 = heapq.nlargest(10, enumerate(cos_sm), key=lambda x: x[1])
 
+    for pair in top_10:
+        outputs.append({"word": uniqueWords[pair[0]], "score": pair[1]})
 
-
-
-
-
-
-
+    return outputs
+    
 
 
 if __name__ == '__main__':
@@ -607,8 +730,7 @@ if __name__ == '__main__':
 
         fullsequence= loadData(filename)
         print ("Full sequence loaded...")
-        #print(uniqueWords)
-        #print (len(uniqueWords))
+
 
 
 
@@ -624,33 +746,134 @@ if __name__ == '__main__':
         #... ... and uncomment the load_model() line
 
         train_vectors(preload=False)
+        #sys.exit()
         [word_embeddings, proj_embeddings] = load_model()
 
 
 
-
+################ Predictions
         #... we've got the trained weight matrices. Now we can do some predictions
         targets = ["good", "bad", "scary", "funny"]
-        for targ in targets:
-            print("Target: ", targ)
-            bestpreds= (prediction(targ))
-            for pred in bestpreds:
-                print (pred["word"],":",pred["score"])
-            print ("\n")
+        
+        with open("p9_output.txt", "w") as text_file:
+            text_file.write("Target_word  Similar_word   Similar_score\n") # headlines of output file
+            for targ in targets:
+                print("Target: ", targ)
+                bestpreds= (prediction(targ))
+                for pred in bestpreds:
+                    print (pred["word"],":",pred["score"])
+                    #text_file.write("{}  {}  {}\n".format(targ, pred["word"], pred["score"])) # write to file
+                print ("\n")
+
+        
+        # write to p8_output_1.txt or p8_output_2.txt file
+        # with open("p8_output_1.txt", "w") as text_file:
+        #     text_file.write("Target word  Similar_word   Similar_score\n") # headlines of output file
+        #     for targ in targets:
+        #         print("Target: ", targ)
+        #         bestpreds= (prediction(targ))
+        #         for pred in bestpreds:
+        #             print (pred["word"],":",pred["score"])
+        #             text_file.write("{}  {}  {}\n".format(targ, pred["word"], pred["score"])) # write to file
+        #         print ("\n")
 
 
-
+ ################ Analogy
         #... try an analogy task. The array should have three entries, A,B,C of the format: A is to B as C is to ?
-        print (analogy(["son", "daughter", "man"]))
-        print (analogy(["thousand", "thousands", "hundred"]))
-        print (analogy(["amusing", "fun", "scary"]))
-        print (analogy(["terrible", "bad", "amazing"]))
+        print ('The analogy for ["son", "daughter", "man"] is: ', analogy(["son", "daughter", "man"]))
+        print ("\n")
+        print ('The analogy for ["thousand", "thousands", "hundred"] is: ', analogy(["thousand", "thousands", "hundred"]))
+        print ("\n")
+        print ('The analogy for ["amusing", "fun", "scary"] is: ', analogy(["amusing", "fun", "scary"]))
+        print ("\n")
+        print ('The analogy for ["terrible", "bad", "amazing"] is: ', analogy(["terrible", "bad", "amazing"]))
+        print ("\n")
 
 
+
+
+
+################ Morphology Part I
 
         #... try morphological task. Input is averages of vector combinations that use some morphological change.
         #... see how well it predicts the expected target word when using word_embeddings vs proj_embeddings in
         #... the morphology() function.
+
+        
+        # prepare for morphology lists and divide the data into trian, dev, test.
+        print ("Creating and preparing morphology_lists...")
+        morphology_data = get_morphology()
+        train = morphology_data[0]
+        dev = morphology_data[1]
+        test = morphology_data[2]
+
+        
+
+        # train the morphology
+        print ("Learning morphology...")
+        learned_morph = [] #global
+        for i in train:
+            learned_morph.append(learn_morphology(i))
+
+
+        #Test using test data
+        imputed = []
+
+        print ("Imputing for test data words:")
+        for (root, variation) in test: # 10 pair of words in total
+            imputed.append(get_or_impute_vector(variation))
+            print ((root,variation))
+
+        
+        print ("Finding the K nearest neighbour for each imputed vector...")
+        k_nearest_matched = [] # which k matched the full word.
+        impt_index = 0
+        for impt in imputed:
+            cos_sm = {} # cosine similarities betweeen the imputed word impt and all test data words(20)
+            for (i,j) in test:
+                first = wordcodes[i] # finding the corresponding index
+                second = wordcodes[j]
+                cos_sm[i] = 1 - cosine(impt, word_embeddings[first,])
+                cos_sm[j] = 1 - cosine(impt, word_embeddings[second,])
+
+            cos_sm = sorted(cos_sm.items(), key=operator.itemgetter(1),reverse=True)
+
+            matched = 22
+            count = 0
+            for (word, score) in cos_sm:
+                if word == test[impt_index][1]:
+                    matched = count
+                count += 1
+            k_nearest_matched.append(matched)
+            impt_index = 0
+
+        print ("========= matched_index ")
+        for k in k_nearest_matched:
+            print (k)
+
+
+        K = list(range(1,21)) # 20
+        
+
+        precision = []
+
+        for k in range(1,21):
+            count = 0
+            for matched in k_nearest_matched:
+                if matched <= k:
+                    count += 1
+            precision.append(count/10)
+
+        print ("======== KNN precision plot ====")
+        plt.plot(K, precision)
+        plt.ylabel('Precision')
+        plt.xlabel('K nearest neighbours')
+        plt.xticks(np.arange(min(K), max(K)+2, 2))
+        plt.show()
+
+
+
+################ Morphology Part II
 
         s_suffix = [word_embeddings[wordcodes["stars"]] - word_embeddings[wordcodes["star"]]]
         others = [["types", "type"],
@@ -661,9 +884,10 @@ if __name__ == '__main__':
         for rec in others:
             s_suffix.append(word_embeddings[wordcodes[rec[0]]] - word_embeddings[wordcodes[rec[1]]])
         s_suffix = np.mean(s_suffix, axis=0)
-        print (morphology([s_suffix, "techniques"]))
-        print (morphology([s_suffix, "sons"]))
-        print (morphology([s_suffix, "secrets"]))
+        print (morphology([s_suffix, "technique"]))
+        print (morphology([s_suffix, "son"]))
+        print (morphology([s_suffix, "secret"])) # I have deleted "s" to all three. I think this makes more sense,
+                                                ## as you want to find the most similar words for technique+s
 
 
 
